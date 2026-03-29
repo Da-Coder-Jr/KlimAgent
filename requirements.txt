@@ -1,0 +1,34 @@
+# KlimAgent Python dependencies
+# Install: pip install -r requirements.txt
+
+# Core
+openai>=1.0.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# Agent-S dependencies
+numpy
+backoff
+pandas
+scikit-learn
+tiktoken
+websockets
+toml
+Pillow
+
+# GUI automation (for live screen capture + actions)
+pyautogui
+
+# OCR for grounding
+pytesseract
+
+# Platform-specific
+pyobjc; platform_system == "Darwin"
+pywinauto; platform_system == "Windows"
+pywin32; platform_system == "Windows"
+
+# Optional: full Agent-S with PaddleOCR (heavier install)
+# paddleocr
+# paddlepaddle
