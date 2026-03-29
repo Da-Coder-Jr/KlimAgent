@@ -251,11 +251,11 @@ def main():
     while True:
         query = input("Query: ")
         if "gpt" in args.model:
-            engine_type = "openai"
+            engine_type = "nvidia_nim"
         elif "claude" in args.model:
-            engine_type = "anthropic"
+            engine_type = "nvidia_nim"
         engine_params = {
-            "engine_type": engine_type,
+            "engine_type": "nvidia_nim",
             "model": args.model,
         }
 

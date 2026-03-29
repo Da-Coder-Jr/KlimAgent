@@ -1,664 +1,663 @@
 /**
  * KlimAgent — Renderer
- * Three panels: Chat, GUI Agent, OSWorld Benchmark
- * All powered by NVIDIA NIM via Agent-S
+ * Two panels: Chat + GUI Agent
+ * All powered by NVIDIA NIM
  */
 'use strict';
 
 // ── State ──────────────────────────────────────────────────────────────────
-let chats = [];
+const STATE_KEY = 'klimagent_v3_state';
+let chats        = [];          // [{ id, title, messages }]
 let activeChatId = null;
-let isStreaming = false;
-let currentMode = 'chat';
+let isStreaming  = false;
+let currentMode  = 'chat';
 let currentModel = 'meta/llama-3.3-70b-instruct';
-let guiAgentRunning = false;
-let benchmarkRunning = false;
-const STATE_KEY = 'klimagent_v2_state';
+let guiRunning   = false;
+let guiSessionId = null;
+let toastTimer   = null;
 
-// ── DOM refs ───────────────────────────────────────────────────────────────
+// ── DOM helpers ────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
-const homeScreen     = $('home-screen');
-const chatScreen     = $('chat-screen');
-const chatMessages   = $('chat-messages-inner');
-const chatInput      = $('chat-input');
-const chatSendBtn    = $('chat-send-btn');
-const homeInput      = $('home-input');
-const homeSendBtn    = $('home-send-btn');
-const topbarTitle    = $('topbar-title');
-const newChatBtn     = $('new-chat-btn');
-const clearBtn       = $('clear-btn');
-const modelSelector  = $('model-selector');
-const statusDot      = $('status-dot');
-const statusText     = $('status-text');
-const bridgeDot      = $('bridge-dot');
-const bridgeText     = $('bridge-text');
-const toast          = $('toast');
 
 // ── Init ───────────────────────────────────────────────────────────────────
-async function init() {
+document.addEventListener('DOMContentLoaded', () => {
   loadState();
   renderChatList();
-  bindEvents();
-  autoResize(homeInput);
-  autoResize(chatInput);
+  bindModeTabs();
+  bindChatEvents();
+  bindGuiEvents();
+  bindMiscEvents();
   checkServers();
   loadModels();
-}
+});
 
 // ── Persistence ────────────────────────────────────────────────────────────
 function loadState() {
   try {
-    const s = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
-    chats = s.chats || [];
-    currentModel = s.model || currentModel;
-    modelSelector.value = currentModel;
-    if (s.activeChatId && chats.find(c => c.id === s.activeChatId)) {
-      activeChatId = s.activeChatId;
-      showChatScreen(activeChatId);
+    const raw = localStorage.getItem(STATE_KEY);
+    if (raw) {
+      const s = JSON.parse(raw);
+      chats        = s.chats        || [];
+      activeChatId = s.activeChatId || null;
+      currentModel = s.currentModel || currentModel;
     }
   } catch {}
+  // Sanitise stale IDs
+  if (activeChatId && !chats.find(c => c.id === activeChatId)) activeChatId = null;
 }
 
 function saveState() {
   try {
-    localStorage.setItem(STATE_KEY, JSON.stringify({ chats, activeChatId, model: currentModel }));
+    localStorage.setItem(STATE_KEY, JSON.stringify({ chats, activeChatId, currentModel }));
   } catch {}
 }
 
-// ── Server checks ──────────────────────────────────────────────────────────
-async function checkServers() {
-  // Node server
-  try {
-    const h = await window.klimAPI.healthCheck();
-    statusDot.className = 'status-dot ' + (h.status === 'ok' ? 'online' : 'offline');
-    statusText.textContent = h.status === 'ok'
-      ? `NIM · ${shortName(h.model || currentModel)}`
-      : 'Server offline';
-  } catch {
-    statusDot.className = 'status-dot offline';
-    statusText.textContent = 'Server offline';
-  }
-  // Python bridge
-  try {
-    const b = await window.klimAPI.bridgeHealth();
-    bridgeDot.className = 'status-dot ' + (b.status === 'ok' ? 'online' : 'offline');
-    bridgeText.textContent = b.status === 'ok' ? 'Bridge online' : 'Bridge offline';
-  } catch {
-    bridgeDot.className = 'status-dot offline';
-    bridgeText.textContent = 'Bridge offline';
-  }
+// ── Mode tabs ──────────────────────────────────────────────────────────────
+function bindModeTabs() {
+  document.querySelectorAll('.mode-tab').forEach(btn => {
+    btn.addEventListener('click', () => switchMode(btn.dataset.mode));
+  });
 }
 
-async function loadModels() {
-  try {
-    const models = await window.klimAPI.getModels();
-    modelSelector.innerHTML = '';
-    for (const m of models) {
-      const opt = document.createElement('option');
-      opt.value = m.id;
-      opt.textContent = m.name + (m.vision ? ' 👁' : '');
-      modelSelector.appendChild(opt);
-    }
-    modelSelector.value = currentModel;
-    if (!modelSelector.value && models.length) {
-      currentModel = models[0].id;
-      modelSelector.value = currentModel;
-    }
-  } catch {}
-}
-
-function shortName(id) {
-  return id.split('/').pop().replace(/-instruct.*/, '').slice(0, 18);
-}
-
-// ── Mode switching ─────────────────────────────────────────────────────────
 function switchMode(mode) {
   currentMode = mode;
-  document.querySelectorAll('.mode-tab').forEach(t => {
-    t.classList.toggle('active', t.dataset.mode === mode);
+  document.querySelectorAll('.mode-tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === mode));
+  $('panel-chat').classList.toggle('hidden', mode !== 'chat');
+  $('panel-gui').classList.toggle('hidden',  mode !== 'gui');
+  $('sidebar-chat').classList.toggle('hidden', mode !== 'chat');
+  $('sidebar-gui').classList.toggle('hidden',  mode !== 'gui');
+  $('chat-model-field').classList.toggle('hidden', mode !== 'chat');
+  $('topbar-title').textContent = mode === 'chat' ? (getActiveChat()?.title || 'KlimAgent') : 'GUI Agent';
+}
+
+// ── Chat events ────────────────────────────────────────────────────────────
+function bindChatEvents() {
+  // Home send
+  $('home-send').addEventListener('click', () => startChatFromHome());
+  $('home-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); startChatFromHome(); }
   });
-  document.querySelectorAll('.panel').forEach(p => p.classList.add('hidden'));
-  $(`panel-${mode}`).classList.remove('hidden');
+  autoResize($('home-input'));
 
-  // Sidebar sections
-  $('sidebar-chat-section').classList.toggle('hidden', mode !== 'chat');
-  $('sidebar-gui-section').classList.toggle('hidden', mode !== 'gui');
-  $('sidebar-bench-section').classList.toggle('hidden', mode !== 'bench');
-  $('chat-model-wrap').classList.toggle('hidden', mode !== 'chat');
+  // Prompt cards
+  document.querySelectorAll('.prompt-card').forEach(card => {
+    card.addEventListener('click', () => {
+      $('home-input').value = card.dataset.p;
+      startChatFromHome();
+    });
+  });
 
-  topbarTitle.textContent = {
-    chat: 'KlimAgent · Chat',
-    gui:  'KlimAgent · GUI Agent',
-    bench:'KlimAgent · OSWorld Benchmark',
-  }[mode] || 'KlimAgent';
+  // Chat send
+  $('chat-send').addEventListener('click', () => sendChat());
+  $('chat-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+  autoResize($('chat-input'));
+
+  // New chat
+  $('new-chat-btn').addEventListener('click', newChat);
+
+  // Model select
+  $('model-select').addEventListener('change', e => {
+    currentModel = e.target.value;
+    saveState();
+  });
+  // Set initial model select value
+  $('model-select').value = currentModel;
 }
 
-// ── Chat management ────────────────────────────────────────────────────────
-function createChat(firstMsg) {
-  const id = `chat_${Date.now()}`;
-  chats.unshift({ id, name: firstMsg.slice(0, 42).trim() || 'New Chat', messages: [] });
-  activeChatId = id;
-  saveState();
-  renderChatList();
-  return chats[0];
+function bindMiscEvents() {
+  $('clear-btn').addEventListener('click', () => {
+    if (currentMode === 'chat') clearChat();
+    else clearGuiLog();
+  });
 }
 
-function getActiveChat() { return chats.find(c => c.id === activeChatId); }
-
-function deleteChat(id) {
-  chats = chats.filter(c => c.id !== id);
-  if (activeChatId === id) {
-    activeChatId = chats[0]?.id || null;
-    activeChatId ? showChatScreen(activeChatId) : showHomeScreen();
-  }
-  saveState();
-  renderChatList();
-}
-
+// ── Chat list ──────────────────────────────────────────────────────────────
 function renderChatList() {
-  const el = $('chat-list');
-  if (!chats.length) {
-    el.innerHTML = '<div style="padding:12px 16px;color:var(--text-muted);font-size:12px">No chats yet</div>';
-    return;
-  }
-  el.innerHTML = chats.map(c => `
-    <div class="chat-item${c.id === activeChatId ? ' active' : ''}" data-id="${c.id}">
-      <span class="chat-item-icon">💬</span>
-      <span class="chat-item-name">${escHtml(c.name)}</span>
-      <button class="chat-item-delete" data-id="${c.id}">✕</button>
-    </div>
-  `).join('');
-  el.querySelectorAll('.chat-item').forEach(item => {
-    item.addEventListener('click', e => {
-      if (e.target.classList.contains('chat-item-delete')) return;
-      showChatScreen(item.dataset.id);
-    });
-    item.querySelector('.chat-item-delete').addEventListener('click', e => {
-      e.stopPropagation();
-      deleteChat(item.dataset.id);
-    });
+  const list = $('chat-list');
+  list.innerHTML = '';
+  [...chats].reverse().forEach(c => {
+    const el = document.createElement('div');
+    el.className = 'chat-item' + (c.id === activeChatId ? ' active' : '');
+    el.textContent = c.title;
+    el.dataset.id = c.id;
+    el.addEventListener('click', () => openChat(c.id));
+    list.appendChild(el);
   });
 }
 
-function showHomeScreen() {
+function getActiveChat() {
+  return chats.find(c => c.id === activeChatId) || null;
+}
+
+function newChat() {
   activeChatId = null;
-  homeScreen.classList.remove('hidden');
-  chatScreen.classList.add('hidden');
-  topbarTitle.textContent = 'KlimAgent · Chat';
+  showHomeScreen();
   renderChatList();
-  saveState();
+  $('topbar-title').textContent = 'KlimAgent';
+  $('home-input').value = '';
+  $('home-input').focus();
 }
 
-function showChatScreen(chatId) {
-  const chat = chats.find(c => c.id === chatId);
-  if (!chat) return;
-  activeChatId = chatId;
-  homeScreen.classList.add('hidden');
-  chatScreen.classList.remove('hidden');
-  topbarTitle.textContent = chat.name;
-  chatMessages.innerHTML = '';
-  for (const msg of chat.messages) {
-    if (msg.role === 'user') appendUserMessage(msg.content);
-    else {
-      const el = createAssistantEl();
-      el.querySelector('.message-content').innerHTML = renderMarkdown(msg.content);
-      addCopyBtns(el);
-    }
+function openChat(id) {
+  activeChatId = id;
+  renderChatList();
+  showChatScreen();
+  const chat = getActiveChat();
+  if (chat) {
+    $('topbar-title').textContent = chat.title;
+    renderMessages(chat.messages);
+    scrollToBottom();
   }
-  scrollBottom();
+  saveState();
+}
+
+function clearChat() {
+  const chat = getActiveChat();
+  if (!chat) return;
+  if (!confirm('Clear this conversation?')) return;
+  chat.messages = [];
+  klimAPI.clearHistory(chat.id).catch(() => {});
+  renderMessages([]);
+  saveState();
+  showToast('Conversation cleared');
+}
+
+// ── Home / Chat screen toggle ──────────────────────────────────────────────
+function showHomeScreen() {
+  $('home-screen').classList.remove('hidden');
+  $('chat-screen').classList.add('hidden');
+}
+
+function showChatScreen() {
+  $('home-screen').classList.add('hidden');
+  $('chat-screen').classList.remove('hidden');
+}
+
+// ── Start chat from home ───────────────────────────────────────────────────
+function startChatFromHome() {
+  const text = $('home-input').value.trim();
+  if (!text) return;
+  $('home-input').value = '';
+
+  // Create new chat
+  const id    = `chat_${Date.now()}`;
+  const title = text.slice(0, 48) + (text.length > 48 ? '…' : '');
+  const chat  = { id, title, messages: [] };
+  chats.push(chat);
+  activeChatId = id;
   renderChatList();
+  showChatScreen();
+  $('topbar-title').textContent = title;
+  renderMessages([]);
   saveState();
+
+  sendMessage(text);
 }
 
-// ── Event binding ──────────────────────────────────────────────────────────
-function bindEvents() {
-  // Mode tabs
-  document.querySelectorAll('.mode-tab').forEach(t => {
-    t.addEventListener('click', () => switchMode(t.dataset.mode));
-  });
+// ── Send chat message ──────────────────────────────────────────────────────
+function sendChat() {
+  if (isStreaming) return;
+  const text = $('chat-input').value.trim();
+  if (!text) return;
+  $('chat-input').value = '';
+  resetTextarea($('chat-input'));
 
-  newChatBtn.addEventListener('click', showHomeScreen);
+  if (!activeChatId) {
+    // Create chat on the fly
+    const id    = `chat_${Date.now()}`;
+    const title = text.slice(0, 48) + (text.length > 48 ? '…' : '');
+    chats.push({ id, title, messages: [] });
+    activeChatId = id;
+    renderChatList();
+    $('topbar-title').textContent = title;
+    renderMessages([]);
+    saveState();
+  }
 
-  clearBtn.addEventListener('click', async () => {
-    if (currentMode === 'chat') {
-      const c = getActiveChat();
-      if (c) { c.messages = []; chatMessages.innerHTML = ''; await window.klimAPI.clearHistory(c.id); saveState(); }
-    } else if (currentMode === 'gui') {
-      $('gui-log').innerHTML = '<div class="log-placeholder">Agent log will appear here…</div>';
-      $('screenshot-img').classList.add('hidden');
-      $('screenshot-container').querySelector('.screenshot-placeholder')?.classList.remove('hidden');
-    } else if (currentMode === 'bench') {
-      $('bench-log').innerHTML = '<div class="log-placeholder">Run a benchmark to see per-task results…</div>';
-      resetScoreCards();
-    }
-    showToast('Cleared');
-  });
-
-  modelSelector.addEventListener('change', () => { currentModel = modelSelector.value; saveState(); checkServers(); });
-
-  homeInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(homeInput.value.trim()); } });
-  homeSendBtn.addEventListener('click', () => sendChatMessage(homeInput.value.trim()));
-  chatInput.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(chatInput.value.trim()); } });
-  chatSendBtn.addEventListener('click', () => isStreaming ? stopChat() : sendChatMessage(chatInput.value.trim()));
-
-  document.querySelectorAll('.prompt-card').forEach(c => {
-    c.addEventListener('click', () => sendChatMessage(c.dataset.prompt));
-  });
-
-  // GUI Agent
-  $('gui-run-btn').addEventListener('click', runGuiAgent);
-  $('gui-stop-btn').addEventListener('click', stopGuiAgent);
-
-  // Benchmark
-  $('bench-run-btn').addEventListener('click', runBenchmark);
-  $('bench-stop-btn').addEventListener('click', () => {
-    benchmarkRunning = false;
-    $('bench-run-btn').classList.remove('hidden');
-    $('bench-stop-btn').classList.add('hidden');
-    benchLog('status', 'Benchmark stopped by user.');
-  });
+  sendMessage(text);
 }
 
-function autoResize(el) {
-  el.addEventListener('input', () => {
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 160) + 'px';
-  });
-}
+async function sendMessage(text) {
+  if (isStreaming) return;
+  const chat = getActiveChat();
+  if (!chat) return;
 
-// ── Text Chat ──────────────────────────────────────────────────────────────
-async function sendChatMessage(text) {
-  if (!text || isStreaming) return;
-  let chat = getActiveChat();
-  if (!chat) { chat = createChat(text); showChatScreen(chat.id); }
-  homeInput.value = ''; chatInput.value = '';
-  homeInput.style.height = ''; chatInput.style.height = '';
-  chat.messages.push({ role: 'user', content: text });
-  saveState();
-  appendUserMessage(text);
-  scrollBottom();
-
-  const assistantEl = createAssistantEl();
   isStreaming = true;
-  updateChatBtns();
+  setInputEnabled(false);
 
-  const contentEl = assistantEl.querySelector('.message-content');
-  let accText = '';
-  let currentToolBlock = null;
+  // Add user bubble
+  chat.messages.push({ role: 'user', content: text });
+  appendUserBubble(text);
+  scrollToBottom();
+  saveState();
+
+  // Assistant bubble (streaming)
+  const assistantEl = appendAssistantBubble();
+  let fullText = '';
+  let toolBuffer = null;
 
   try {
-    const reader = await window.klimAPI.sendMessage({ message: text, chatId: chat.id, model: currentModel });
+    const reader = await klimAPI.sendMessage({
+      message:    text,
+      chatId:     chat.id,
+      model:      currentModel,
+    });
     const decoder = new TextDecoder();
-    let buf = '';
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
+
+      const chunk = decoder.decode(value, { stream: true });
+      for (const line of chunk.split('\n')) {
         if (!line.startsWith('data: ')) continue;
-        let evt;
-        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
-        if (evt.type === 'done') break;
-        if (evt.type === 'text') {
-          if (currentToolBlock) { currentToolBlock = null; }
-          accText += evt.text;
-          contentEl.innerHTML = renderMarkdown(accText) + '<span class="cursor-blink">▋</span>';
-          scrollBottom();
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (ev.type === 'text') {
+          fullText += ev.text;
+          renderMarkdownInto(assistantEl, fullText);
+          scrollToBottom();
+        } else if (ev.type === 'tool_use') {
+          toolBuffer = { name: ev.name, input: '' };
+          appendToolBlock(assistantEl, ev.name, null);
+        } else if (ev.type === 'tool_input_delta') {
+          if (toolBuffer) toolBuffer.input += ev.delta || '';
+        } else if (ev.type === 'tool_result') {
+          const inputData = toolBuffer ? parseToolInput(toolBuffer.input) : {};
+          updateLastToolBlock(assistantEl, ev.name || (toolBuffer?.name), inputData, ev.result);
+          toolBuffer = null;
+        } else if (ev.type === 'done') {
+          break;
+        } else if (ev.type === 'error') {
+          fullText += `\n\n**Error:** ${ev.error}`;
+          renderMarkdownInto(assistantEl, fullText);
+          break;
         }
-        if (evt.type === 'tool_use') {
-          currentToolBlock = appendToolBlock(contentEl, evt.name, evt.id);
-        }
-        if (evt.type === 'tool_result' && currentToolBlock) {
-          appendToolResult(currentToolBlock, typeof evt.content === 'string' ? evt.content : JSON.stringify(evt.content, null, 2));
-          currentToolBlock = null;
-        }
-        if (evt.type === 'error') { accText += `\n\n**Error:** ${escHtml(evt.error)}`; contentEl.innerHTML = renderMarkdown(accText); }
       }
     }
-  } catch (e) {
-    if (e.name !== 'AbortError') { accText += `\n\n**Error:** ${e.message}`; contentEl.innerHTML = renderMarkdown(accText); }
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      fullText += `\n\n**Network error:** ${err.message}`;
+      renderMarkdownInto(assistantEl, fullText);
+    }
   } finally {
     isStreaming = false;
-    updateChatBtns();
-    if (accText) { chat.messages.push({ role: 'assistant', content: accText }); saveState(); }
-    contentEl.innerHTML = renderMarkdown(accText || '…');
-    addCopyBtns(assistantEl);
-    scrollBottom();
+    setInputEnabled(true);
+    $('chat-input').focus();
+  }
+
+  if (fullText) {
+    chat.messages.push({ role: 'assistant', content: fullText });
+    saveState();
   }
 }
 
-function stopChat() {
-  const c = getActiveChat();
-  c ? window.klimAPI.stopQuery(c.id) : window.klimAPI.abortCurrentRequest();
-  isStreaming = false;
-  updateChatBtns();
+function parseToolInput(str) {
+  try { return JSON.parse(str); } catch { return str; }
 }
 
-function updateChatBtns() {
-  chatSendBtn.textContent = isStreaming ? '■' : '▶';
-  chatSendBtn.className = `chat-send-btn${isStreaming ? ' stop' : ''}`;
-  homeSendBtn.disabled = isStreaming;
+// ── Message rendering ──────────────────────────────────────────────────────
+function renderMessages(messages) {
+  $('msgs-inner').innerHTML = '';
+  messages.forEach(m => {
+    if (m.role === 'user') appendUserBubble(m.content);
+    else appendAssistantBubble(m.content);
+  });
 }
 
-// ── GUI Agent ──────────────────────────────────────────────────────────────
-async function runGuiAgent() {
-  const task = $('gui-task-input').value.trim();
-  if (!task) { showToast('Enter a task first'); return; }
-
-  guiAgentRunning = true;
-  $('gui-run-btn').classList.add('hidden');
-  $('gui-stop-btn').classList.remove('hidden');
-  $('gui-log').innerHTML = '';
-  $('step-counter').textContent = '';
-
-  const sessionId = `gui_${Date.now()}`;
-
-  try {
-    const reader = await window.klimAPI.runGuiAgent({
-      task,
-      session_id: sessionId,
-      generation_model: $('gui-gen-model').value,
-      grounding_model: $('gui-vis-model').value,
-      max_steps: parseInt($('gui-max-steps').value) || 15,
-      enable_reflection: $('gui-reflection').checked,
-    });
-
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        let evt;
-        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
-        if (evt.type === 'end') break;
-        handleGuiEvent(evt);
-        if (!guiAgentRunning) break;
-      }
-      if (!guiAgentRunning) break;
-    }
-  } catch (e) {
-    guiLog('error', `Error: ${e.message}`);
-  } finally {
-    guiAgentRunning = false;
-    $('gui-run-btn').classList.remove('hidden');
-    $('gui-stop-btn').classList.add('hidden');
-  }
+function appendUserBubble(text) {
+  const msg = document.createElement('div');
+  msg.className = 'msg user';
+  msg.innerHTML = `
+    <div class="msg-header">
+      <div class="msg-avatar">U</div>
+      <span class="msg-name">You</span>
+    </div>
+    <div class="msg-body">${escapeHtml(text)}</div>`;
+  $('msgs-inner').appendChild(msg);
+  return msg;
 }
 
-function handleGuiEvent(evt) {
-  switch (evt.type) {
-    case 'status': guiLog('status', evt.text); break;
-    case 'warn': guiLog('warn', '⚠ ' + evt.text); break;
-    case 'step':
-      guiLog('step', `▶ Step ${evt.step}: ${evt.text || ''}`);
-      $('step-counter').textContent = `Step ${evt.step}`;
-      break;
-    case 'screenshot':
-      showScreenshot(evt.data);
-      guiLog('screenshot', '📸 Screenshot captured');
-      break;
-    case 'action': guiLog('action', '⚙ ' + evt.action); break;
-    case 'actions':
-      if (evt.actions?.length) {
-        guiLog('action', `🎯 Actions: ${evt.actions.slice(0, 3).join(' | ')}`);
-      }
-      break;
-    case 'error': guiLog('error', '✗ ' + evt.text); break;
-    case 'done': guiLog('done', '✓ ' + (evt.text || 'Complete')); break;
-  }
+function appendAssistantBubble(text) {
+  const msg = document.createElement('div');
+  msg.className = 'msg assistant';
+  const body = document.createElement('div');
+  body.className = 'msg-body md';
+  msg.innerHTML = `
+    <div class="msg-header">
+      <div class="msg-avatar">K</div>
+      <span class="msg-name">KlimAgent</span>
+    </div>`;
+  msg.appendChild(body);
+  $('msgs-inner').appendChild(msg);
+  if (text) renderMarkdownInto(body, text);
+  else body.innerHTML = '<div class="dots"><span></span><span></span><span></span></div>';
+  return body;
 }
 
-function guiLog(type, text) {
-  const log = $('gui-log');
-  if (log.querySelector('.log-placeholder')) log.innerHTML = '';
-  const entry = document.createElement('div');
-  entry.className = `log-entry ${type}`;
-  entry.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
-  log.appendChild(entry);
-  log.scrollTop = log.scrollHeight;
-}
-
-function showScreenshot(b64) {
-  const img = $('screenshot-img');
-  const placeholder = $('screenshot-container').querySelector('.screenshot-placeholder');
-  img.src = `data:image/png;base64,${b64}`;
-  img.classList.remove('hidden');
-  placeholder?.classList.add('hidden');
-}
-
-async function stopGuiAgent() {
-  guiAgentRunning = false;
-  await window.klimAPI.stopGuiAgent(`gui_${Date.now()}`);
-  $('gui-run-btn').classList.remove('hidden');
-  $('gui-stop-btn').classList.add('hidden');
-  guiLog('status', 'Stopped.');
-}
-
-// ── OSWorld Benchmark ──────────────────────────────────────────────────────
-async function runBenchmark() {
-  benchmarkRunning = true;
-  $('bench-run-btn').classList.add('hidden');
-  $('bench-stop-btn').classList.remove('hidden');
-  $('bench-log').innerHTML = '';
-  resetScoreCards();
-
-  // Add progress bar
-  const prog = document.createElement('div');
-  prog.className = 'progress-bar-wrap';
-  prog.innerHTML = '<div class="progress-bar" id="bench-progress"></div>';
-  $('bench-log').before(prog);
-
-  const maxTasks = parseInt($('bench-tasks').value) || 5;
-  let tasksComplete = 0;
-
-  try {
-    const reader = await window.klimAPI.runBenchmark({
-      domain: $('bench-domain').value,
-      max_steps: parseInt($('bench-steps').value) || 15,
-      num_tasks: maxTasks,
-      generation_model: $('bench-model').value,
-      grounding_model: 'nvidia/llama-3.2-90b-vision-instruct',
-    });
-
-    const decoder = new TextDecoder();
-    let buf = '';
-    while (true) {
-      if (!benchmarkRunning) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        let evt;
-        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
-        if (evt.type === 'end') break;
-        handleBenchEvent(evt, maxTasks, (n) => { tasksComplete = n; });
-      }
-    }
-  } catch (e) {
-    benchLog('error', `Error: ${e.message}`);
-  } finally {
-    benchmarkRunning = false;
-    $('bench-run-btn').classList.remove('hidden');
-    $('bench-stop-btn').classList.add('hidden');
-    prog.remove();
-  }
-}
-
-function handleBenchEvent(evt, maxTasks, setComplete) {
-  switch (evt.type) {
-    case 'status': benchLog('status', evt.text); break;
-    case 'warn': benchLog('warn', '⚠ ' + evt.text); break;
-    case 'task_start':
-      benchLog('step', `[${evt.task_num}/${evt.total}] ${evt.domain}/${evt.example_id}`);
-      $('score-tasks').textContent = evt.task_num;
-      if ($('bench-progress')) {
-        $('bench-progress').style.width = `${(evt.task_num / maxTasks) * 100}%`;
-      }
-      break;
-    case 'task_result':
-      benchLog(evt.score > 0 ? 'done' : 'error',
-        `${evt.domain}/${evt.example_id}: ${evt.score > 0 ? '✓' : '✗'} score=${evt.score.toFixed(2)}  avg=${evt.running_avg.toFixed(2)}`
-      );
-      $('score-avg').textContent = evt.running_avg.toFixed(2);
-      setComplete(evt.task_num || 0);
-      break;
-    case 'benchmark_done':
-      $('score-avg').textContent = evt.avg_score.toFixed(2);
-      $('score-pct').textContent = `${evt.success_rate_pct}%`;
-      $('score-tasks').textContent = evt.total_tasks;
-      $('score-model').textContent = shortName(evt.model || '');
-      benchLog('done', `✓ Benchmark complete! Success rate: ${evt.success_rate_pct}% on ${evt.total_tasks} tasks`);
-      // Update ref table
-      updateRefTable(evt.model, evt.success_rate_pct);
-      break;
-    case 'error': benchLog('error', '✗ ' + evt.text); break;
-  }
-}
-
-function updateRefTable(model, pct) {
-  const rows = document.querySelectorAll('.ref-table .highlight');
-  for (const cell of rows) {
-    const row = cell.closest('tr');
-    const modelCell = row?.querySelector('td');
-    if (modelCell && shortName(model).toLowerCase().includes(shortName(modelCell.textContent).toLowerCase())) {
-      cell.textContent = `${pct}%`;
-    }
-  }
-}
-
-function benchLog(type, text) {
-  const log = $('bench-log');
-  if (log.querySelector('.log-placeholder')) log.innerHTML = '';
-  const entry = document.createElement('div');
-  entry.className = `log-entry ${type}`;
-  entry.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
-  log.appendChild(entry);
-  log.scrollTop = log.scrollHeight;
-}
-
-function resetScoreCards() {
-  $('score-avg').textContent = '—';
-  $('score-pct').textContent = '—';
-  $('score-tasks').textContent = '0';
-  $('score-model').textContent = '—';
-}
-
-// ── DOM helpers ────────────────────────────────────────────────────────────
-function appendUserMessage(text) {
-  const el = document.createElement('div');
-  el.className = 'message user';
-  el.innerHTML = `<div class="message-header"><div class="message-avatar">U</div><span class="message-sender">You</span></div><div class="message-content">${escHtml(text)}</div>`;
-  chatMessages.appendChild(el);
-}
-
-function createAssistantEl() {
-  const el = document.createElement('div');
-  el.className = 'message assistant';
-  el.innerHTML = `<div class="message-header"><div class="message-avatar">K</div><span class="message-sender">KlimAgent</span></div><div class="message-content"><div class="loading-dots"><span></span><span></span><span></span></div></div>`;
-  chatMessages.appendChild(el);
-  scrollBottom();
-  return el;
-}
-
-function appendToolBlock(contentEl, name, id) {
+function appendToolBlock(parentEl, name, input) {
   const block = document.createElement('div');
   block.className = 'tool-block';
-  block.innerHTML = `<div class="tool-header"><span>⚙</span><span class="tool-name">${escHtml(name)}</span><span class="tool-status">running…</span></div><div class="tool-body"></div>`;
-  block.querySelector('.tool-header').addEventListener('click', () => {
-    block.querySelector('.tool-body').classList.toggle('expanded');
-  });
-  contentEl.appendChild(block);
-  scrollBottom();
+  block.dataset.name = name;
+  block.innerHTML = `
+    <div class="tool-head" onclick="this.nextElementSibling.classList.toggle('open')">
+      <span>⚙</span>
+      <span class="tool-fn">${escapeHtml(name)}</span>
+      <span class="tool-stat">running…</span>
+    </div>
+    <div class="tool-body">
+      <pre class="tool-input-pre" style="display:none"></pre>
+      <div class="tool-result" style="display:none"></div>
+    </div>`;
+  parentEl.appendChild(block);
   return block;
 }
 
-function appendToolResult(block, result) {
-  const body = block.querySelector('.tool-body');
-  body.classList.add('expanded');
-  const el = document.createElement('div');
-  el.className = 'tool-result-block';
-  el.textContent = result.slice(0, 2000) + (result.length > 2000 ? '\n…(truncated)' : '');
-  body.appendChild(el);
-  block.querySelector('.tool-status').textContent = 'done';
-  scrollBottom();
+function updateLastToolBlock(parentEl, name, input, output) {
+  const blocks = parentEl.querySelectorAll('.tool-block');
+  const block  = blocks[blocks.length - 1];
+  if (!block) return;
+  block.querySelector('.tool-stat').textContent = 'done';
+  if (input && typeof input === 'object' && Object.keys(input).length) {
+    const pre = block.querySelector('.tool-input-pre');
+    pre.textContent = JSON.stringify(input, null, 2);
+    pre.style.display = '';
+  }
+  if (output !== undefined && output !== null) {
+    const out = block.querySelector('.tool-result');
+    out.textContent = typeof output === 'string' ? output : JSON.stringify(output, null, 2);
+    out.style.display = '';
+  }
 }
 
-function addCopyBtns(msgEl) {
-  msgEl.querySelectorAll('pre').forEach(pre => {
-    if (pre.querySelector('.code-block-header')) return;
-    const code = pre.querySelector('code');
-    const lang = (code?.className || '').replace('language-', '') || 'code';
-    const header = document.createElement('div');
-    header.className = 'code-block-header';
-    header.innerHTML = `<span>${escHtml(lang)}</span><button class="copy-code-btn">Copy</button>`;
-    header.querySelector('.copy-code-btn').addEventListener('click', () => {
-      navigator.clipboard.writeText(code?.textContent || pre.textContent).then(() => showToast('Copied!'));
+// ── GUI Agent events ───────────────────────────────────────────────────────
+function bindGuiEvents() {
+  $('gui-run').addEventListener('click',  startGuiAgent);
+  $('gui-stop').addEventListener('click', stopGuiAgent);
+  $('gui-shot').addEventListener('click', takeScreenshot);
+}
+
+async function startGuiAgent() {
+  if (guiRunning) return;
+  const task = $('gui-task').value.trim();
+  if (!task) { showToast('Enter a task first'); return; }
+
+  guiRunning   = true;
+  guiSessionId = `gui_${Date.now()}`;
+  $('gui-run').classList.add('hidden');
+  $('gui-stop').classList.remove('hidden');
+  clearGuiLog();
+
+  const genModel = $('gui-gen-model').value;
+  const visModel = $('gui-vis-model').value;
+  const maxSteps = parseInt($('gui-max-steps').value) || 15;
+  const reflect  = $('gui-reflect').checked;
+
+  appendGuiLog('status',`Starting agent · task: "${task.slice(0, 80)}"`);
+
+  try {
+    const reader = await klimAPI.runGuiAgent({
+      task,
+      session_id:        guiSessionId,
+      generation_model:  genModel,
+      grounding_model:   visModel,
+      max_steps:         maxSteps,
+      enable_reflection: reflect,
     });
-    pre.insertBefore(header, pre.firstChild);
+    const decoder = new TextDecoder();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      for (const line of chunk.split('\n')) {
+        if (!line.startsWith('data: ')) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+        handleGuiEvent(ev);
+        if (ev.type === 'end' || ev.type === 'done') break;
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'AbortError') appendGuiLog('error', `Stream error: ${err.message}`);
+  } finally {
+    guiRunning = false;
+    $('gui-run').classList.remove('hidden');
+    $('gui-stop').classList.add('hidden');
+    $('step-info').textContent = '';
+  }
+}
+
+function handleGuiEvent(ev) {
+  switch (ev.type) {
+    case 'status':
+      appendGuiLog('status',ev.text);
+      break;
+    case 'warn':
+      appendGuiLog('warn', ev.text);
+      break;
+    case 'ready':
+      appendGuiLog('ready', ev.text);
+      break;
+    case 'step':
+      $('step-info').textContent = `Step ${ev.step} / ${ev.total}`;
+      appendGuiLog('step', `Step ${ev.step} of ${ev.total}`);
+      break;
+    case 'screenshot':
+      showScreenshot(ev.data);
+      break;
+    case 'actions':
+      if (ev.actions?.length) appendGuiLog('status',`Actions: ${ev.actions.join(', ')}`);
+      break;
+    case 'action':
+      appendGuiLog('action', ev.action);
+      break;
+    case 'error':
+      appendGuiLog('error', ev.text);
+      break;
+    case 'stopped':
+      appendGuiLog('warn', ev.text || 'Stopped');
+      break;
+    case 'done':
+      appendGuiLog('ready', ev.text || 'Done');
+      break;
+    case 'end':
+      appendGuiLog('status','─── session ended ───');
+      break;
+  }
+}
+
+async function stopGuiAgent() {
+  if (!guiRunning) return;
+  await klimAPI.stopGuiAgent(guiSessionId).catch(() => {});
+  guiRunning = false;
+  $('gui-run').classList.remove('hidden');
+  $('gui-stop').classList.add('hidden');
+  appendGuiLog('warn', 'Stopped by user');
+}
+
+async function takeScreenshot() {
+  showToast('Capturing screenshot…');
+  const result = await klimAPI.takeScreenshot().catch(() => null);
+  if (result?.screenshot) {
+    showScreenshot(result.screenshot);
+    showToast('Screenshot captured');
+  } else {
+    showToast('Screenshot failed — is bridge running?');
+  }
+}
+
+// ── GUI Log ────────────────────────────────────────────────────────────────
+function appendGuiLog(type, text) {
+  const log = $('gui-log');
+  // Clear placeholder
+  const ph = log.querySelector('.log-placeholder');
+  if (ph) ph.remove();
+
+  const line = document.createElement('div');
+  line.className = `log-line ${type}`;
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  line.textContent = `[${ts}] ${text}`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function clearGuiLog() {
+  $('gui-log').innerHTML = '<span class="log-placeholder">Log appears when the agent runs…</span>';
+}
+
+// ── Live screenshot ────────────────────────────────────────────────────────
+function showScreenshot(b64) {
+  const img  = $('screen-img');
+  const empty = $('screen-empty');
+  img.src = `data:image/png;base64,${b64}`;
+  img.classList.remove('hidden');
+  empty.classList.add('hidden');
+}
+
+// ── Models ─────────────────────────────────────────────────────────────────
+async function loadModels() {
+  try {
+    const models = await klimAPI.getModels();
+    const sel    = $('model-select');
+    const cur    = sel.value || currentModel;
+    // Only repopulate if we got real data
+    if (models?.length) {
+      sel.innerHTML = '';
+      models.filter(m => !m.vision).forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.name || m.id;
+        sel.appendChild(opt);
+      });
+      // Restore selection
+      if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+      else if (sel.options.length) sel.value = sel.options[0].value;
+      currentModel = sel.value;
+    }
+  } catch {}
+}
+
+// ── Health checks ──────────────────────────────────────────────────────────
+async function checkServers() {
+  checkApi();
+  checkBridge();
+  setInterval(checkApi,    30000);
+  setInterval(checkBridge, 30000);
+}
+
+async function checkApi() {
+  try {
+    const h = await klimAPI.healthCheck();
+    setDot('api-dot', 'api-txt', h.status === 'ok', `NIM · ${h.model || ''}`);
+  } catch {
+    setDot('api-dot', 'api-txt', false, 'API offline');
+  }
+}
+
+async function checkBridge() {
+  try {
+    const h = await klimAPI.bridgeHealth();
+    setDot('bridge-dot', 'bridge-txt', h.status === 'ok', `Bridge · ${h.platform || 'ok'}`);
+  } catch {
+    setDot('bridge-dot', 'bridge-txt', false, 'Bridge offline');
+  }
+}
+
+function setDot(dotId, txtId, ok, msg) {
+  const dot = $(dotId);
+  const txt = $(txtId);
+  dot.className = `dot ${ok ? 'online' : 'offline'}`;
+  txt.textContent = msg;
+}
+
+// ── Input state helpers ────────────────────────────────────────────────────
+function setInputEnabled(enabled) {
+  $('chat-input').disabled  = !enabled;
+  $('chat-send').disabled   = !enabled;
+  $('chat-send').textContent = enabled ? '▶' : '■';
+  if (!enabled) {
+    $('chat-send').onclick = () => {
+      klimAPI.abortCurrentRequest();
+      setInputEnabled(true);
+    };
+  } else {
+    $('chat-send').onclick = () => sendChat();
+  }
+}
+
+// ── Auto-resize textareas ──────────────────────────────────────────────────
+function autoResize(el) {
+  el.addEventListener('input', () => {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   });
 }
 
-function scrollBottom() {
-  const c = $('chat-messages');
-  if (c) c.scrollTop = c.scrollHeight;
+function resetTextarea(el) {
+  el.style.height = 'auto';
+}
+
+// ── Scroll ─────────────────────────────────────────────────────────────────
+function scrollToBottom() {
+  const sc = $('msgs-scroll');
+  sc.scrollTop = sc.scrollHeight;
 }
 
 // ── Toast ──────────────────────────────────────────────────────────────────
-let _toastTimer;
-function showToast(msg) {
-  toast.textContent = msg;
-  toast.classList.add('show');
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => toast.classList.remove('show'), 2000);
+function showToast(msg, duration = 3000) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), duration);
 }
 
-// ── Markdown ───────────────────────────────────────────────────────────────
-function renderMarkdown(text) {
-  if (!text) return '';
-  let h = escHtml(text);
-  h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
-    `<pre><code class="language-${escHtml(lang || 'text')}">${code.trimEnd()}</code></pre>`);
-  h = h.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-  h = h.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  h = h.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
-  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  h = h.replace(/^&gt; (.+)$/gm, '<blockquote><p>$1</p></blockquote>');
-  h = h.replace(/^---+$/gm, '<hr>');
-  h = h.replace(/^[\*\-] (.+)$/gm, '<li>$1</li>');
-  h = h.replace(/(<li>.*<\/li>(\n|$))+/g, m => `<ul>${m}</ul>`);
-  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  h = h.replace(/\n\n+/g, '</p><p>');
-  h = `<p>${h}</p>`;
-  h = h.replace(/\n/g, '<br>');
-  h = h.replace(/<p>\s*<\/p>/g, '');
-  ['h1','h2','h3','ul','pre','blockquote'].forEach(tag => {
-    h = h.replace(new RegExp(`<p>(<${tag}>)`, 'g'), '$1');
-    h = h.replace(new RegExp(`(</${tag}>)<\/p>`, 'g'), '$1');
-  });
-  h = h.replace(/<p>(<hr>)<\/p>/g, '$1');
-  return `<div class="markdown-content">${h}</div>`;
+// ── Markdown renderer (lightweight) ───────────────────────────────────────
+function renderMarkdownInto(el, md) {
+  el.innerHTML = parseMarkdown(md);
 }
 
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+function parseMarkdown(text) {
+  // Fenced code blocks
+  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre class="code-block${lang ? ' lang-' + lang : ''}"><code>${escapeHtml(code.trimEnd())}</code></pre>`);
+  // Inline code
+  text = text.replace(/`([^`]+)`/g, (_, c) => `<code class="inline-code">${escapeHtml(c)}</code>`);
+  // Bold
+  text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // Italic
+  text = text.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Headings
+  text = text.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  text = text.replace(/^## (.+)$/gm,  '<h2>$1</h2>');
+  text = text.replace(/^# (.+)$/gm,   '<h1>$1</h1>');
+  // Unordered list
+  text = text.replace(/^\s*[-*] (.+)$/gm, '<li>$1</li>');
+  text = text.replace(/(<li>[\s\S]+?<\/li>)/g, '<ul>$1</ul>');
+  // Ordered list
+  text = text.replace(/^\s*\d+\. (.+)$/gm, '<li>$1</li>');
+  // Horizontal rule
+  text = text.replace(/^---$/gm, '<hr>');
+  // Paragraphs (double newline)
+  text = text.replace(/\n{2,}/g, '</p><p>');
+  text = '<p>' + text + '</p>';
+  // Single newlines within paragraphs
+  text = text.replace(/([^>])\n([^<])/g, '$1<br>$2');
+  // Clean up empty paragraphs
+  text = text.replace(/<p>\s*<\/p>/g, '');
+  return text;
 }
 
-// Cursor blink
-const sty = document.createElement('style');
-sty.textContent = `.cursor-blink{display:inline-block;animation:blink .8s step-end infinite;color:var(--accent-green)}@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}`;
-document.head.appendChild(sty);
-
-// ── Start ──────────────────────────────────────────────────────────────────
-init();
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}

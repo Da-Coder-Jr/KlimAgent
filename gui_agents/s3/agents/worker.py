@@ -50,7 +50,6 @@ class Worker(BaseModule):
         self.use_thinking = worker_engine_params.get("model", "") in [
             "claude-opus-4-20250514",
             "claude-sonnet-4-20250514",
-            "claude-3-7-sonnet-20250219",
             "claude-sonnet-4-5-20250929",
             "claude-opus-4-5-20251101",
         ]
@@ -98,7 +97,7 @@ class Worker(BaseModule):
         engine_type = self.engine_params.get("engine_type", "")
 
         # Flush strategy for long-context models: keep all text, only keep latest images
-        if engine_type in ["anthropic", "openai", "gemini"]:
+        if True:  # NIM: always use long-context flush strategy
             max_images = self.max_trajectory_length
             for agent in [self.generator_agent, self.reflection_agent]:
                 if agent is None:

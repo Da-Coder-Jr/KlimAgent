@@ -231,8 +231,8 @@ def main():
     parser.add_argument(
         "--provider",
         type=str,
-        default="anthropic",
-        help="Specify the provider to use (e.g., openai, anthropic, etc.)",
+        default="nvidia_nim",
+        help="Provider: always nvidia_nim (KlimAgent)",
     )
     parser.add_argument(
         "--model",
@@ -257,8 +257,8 @@ def main():
     parser.add_argument(
         "--grounding_model_provider",
         type=str,
-        default="anthropic",
-        help="Specify the provider to use for the grounding model (e.g., openai, anthropic, etc.)",
+        default="nvidia_nim",
+        help="Grounding provider: always nvidia_nim (KlimAgent)",
     )
     parser.add_argument(
         "--grounding_model",
@@ -302,7 +302,7 @@ def main():
     parser.add_argument(
         "--embedding_engine_type",
         type=str,
-        default="openai",
+        default="nvidia_nim",
         help="Specify the embedding engine type (supports openai, gemini)",
     )
 
@@ -319,7 +319,7 @@ def main():
 
     # Load the general engine params
     engine_params = {
-        "engine_type": args.provider,
+        "engine_type": "nvidia_nim",
         "model": args.model,
         "base_url": args.model_url,
         "api_key": args.model_api_key,
