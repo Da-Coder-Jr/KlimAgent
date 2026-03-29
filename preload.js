@@ -1,87 +1,94 @@
 /**
- * KlimAgent — Preload Script
+ * KlimAgent — Preload (contextBridge)
+ * Exposes only klimAPI to the renderer. No Node.js internals leak through.
  */
 const { contextBridge } = require('electron');
 
-const SERVER_URL = 'http://localhost:3001';
-let currentAbortController = null;
+const API = 'http://localhost:3001';
+let _abort = null;
 
 contextBridge.exposeInMainWorld('klimAPI', {
+
   // ── Text Chat ──────────────────────────────────────────────────────────────
   sendMessage: async (params) => {
-    if (currentAbortController) currentAbortController.abort();
-    currentAbortController = new AbortController();
-    const res = await fetch(`${SERVER_URL}/api/chat`, {
+    if (_abort) _abort.abort();
+    _abort = new AbortController();
+    const res = await fetch(`${API}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
-      signal: currentAbortController.signal
+      signal: _abort.signal,
     });
     return res.body.getReader();
   },
-  stopQuery: async (chatId, provider) => {
-    if (currentAbortController) { currentAbortController.abort(); currentAbortController = null; }
+
+  stopQuery: async (chatId) => {
+    if (_abort) { _abort.abort(); _abort = null; }
     try {
-      await fetch(`${SERVER_URL}/api/abort`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, provider })
+      await fetch(`${API}/api/abort`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId }),
       });
     } catch {}
   },
+
   abortCurrentRequest: () => {
-    if (currentAbortController) { currentAbortController.abort(); currentAbortController = null; }
+    if (_abort) { _abort.abort(); _abort = null; }
   },
-  getProviders: async () => {
-    try { return await (await fetch(`${SERVER_URL}/api/providers`)).json(); } catch { return ['nvidia-nim']; }
-  },
+
   getModels: async () => {
-    try { return await (await fetch(`${SERVER_URL}/api/models`)).json(); }
-    catch { return [{ id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B', provider: 'Meta', vision: false }]; }
+    try { return await (await fetch(`${API}/api/models`)).json(); }
+    catch { return [{ id: 'meta/llama-3.3-70b-instruct', name: 'Llama 3.3 70B', vision: false }]; }
   },
-  clearHistory: async (chatId, provider) => {
+
+  clearHistory: async (chatId) => {
     try {
-      await fetch(`${SERVER_URL}/api/clear`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId, provider })
+      await fetch(`${API}/api/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId }),
       });
     } catch {}
   },
+
   healthCheck: async () => {
-    try { return await (await fetch(`${SERVER_URL}/api/health`)).json(); } catch { return { status: 'offline' }; }
+    try { return await (await fetch(`${API}/api/health`)).json(); }
+    catch { return { status: 'offline' }; }
   },
 
   // ── GUI Agent ──────────────────────────────────────────────────────────────
   runGuiAgent: async (params) => {
-    const res = await fetch(`${SERVER_URL}/api/bridge/gui-agent/run`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params)
+    const res = await fetch(`${API}/api/bridge/gui-agent/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
     });
     return res.body.getReader();
   },
+
   stopGuiAgent: async (sessionId) => {
     try {
-      await fetch(`${SERVER_URL}/api/bridge/gui-agent/stop`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId })
+      await fetch(`${API}/api/bridge/gui-agent/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId }),
       });
     } catch {}
   },
-  takeScreenshot: async (sessionId) => {
-    try { return await (await fetch(`${SERVER_URL}/api/bridge/screenshot`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId })
-    })).json(); } catch { return null; }
-  },
-  bridgeHealth: async () => {
-    try { return await (await fetch(`${SERVER_URL}/api/bridge/health`)).json(); } catch { return { status: 'offline' }; }
+
+  takeScreenshot: async () => {
+    try {
+      return await (await fetch(`${API}/api/bridge/screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      })).json();
+    } catch { return null; }
   },
 
-  // ── OSWorld Benchmark ──────────────────────────────────────────────────────
-  runBenchmark: async (params) => {
-    const res = await fetch(`${SERVER_URL}/api/bridge/benchmark/run`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params)
-    });
-    return res.body.getReader();
+  bridgeHealth: async () => {
+    try { return await (await fetch(`${API}/api/bridge/health`)).json(); }
+    catch { return { status: 'offline' }; }
   },
 });

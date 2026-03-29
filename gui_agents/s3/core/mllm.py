@@ -1,307 +1,141 @@
+"""
+KlimAgent — LMMAgent
+Multimodal agent wrapper using NVIDIA NIM exclusively.
+Uses OpenAI message format throughout (NIM is OpenAI-compatible).
+"""
 import base64
-
 import numpy as np
 
-from gui_agents.s3.core.engine import (
-    LMMEngineAnthropic,
-    LMMEngineAzureOpenAI,
-    LMMEngineHuggingFace,
-    LMMEngineOpenAI,
-    LMMEngineOpenRouter,
-    LMMEngineParasail,
-    LMMEngineNvidiaNIM,
-    LMMEnginevLLM,
-    LMMEngineGemini,
-)
+# Import is module-relative; the path is patched per-version below
+from gui_agents.s3.core.engine import LMMEngineNvidiaNIM
 
 
 class LMMAgent:
-    def __init__(self, engine_params=None, system_prompt=None, engine=None):
-        if engine is None:
-            if engine_params is not None:
-                engine_type = engine_params.get("engine_type")
-                if engine_type == "openai":
-                    self.engine = LMMEngineOpenAI(**engine_params)
-                elif engine_type == "anthropic":
-                    self.engine = LMMEngineAnthropic(**engine_params)
-                elif engine_type == "azure":
-                    self.engine = LMMEngineAzureOpenAI(**engine_params)
-                elif engine_type == "vllm":
-                    self.engine = LMMEnginevLLM(**engine_params)
-                elif engine_type == "huggingface":
-                    self.engine = LMMEngineHuggingFace(**engine_params)
-                elif engine_type == "gemini":
-                    self.engine = LMMEngineGemini(**engine_params)
-                elif engine_type == "open_router":
-                    self.engine = LMMEngineOpenRouter(**engine_params)
-                elif engine_type == "parasail":
-                    self.engine = LMMEngineParasail(**engine_params)
-                else:
-                    raise ValueError(f"engine_type '{engine_type}' is not supported")
-            else:
-                raise ValueError("engine_params must be provided")
-        else:
+    """
+    Manages conversation history and delegates inference to LMMEngineNvidiaNIM.
+    Supports text-only and vision (screenshot) messages in OpenAI format.
+    """
+
+    def __init__(self, engine_params: dict = None, system_prompt: str = None, engine=None):
+        if engine is not None:
             self.engine = engine
-
-        self.messages = []  # Empty messages
-
-        if system_prompt:
-            self.add_system_prompt(system_prompt)
+        elif engine_params is not None:
+            # Strip engine_type key — we always use NIM
+            params = {k: v for k, v in engine_params.items() if k != "engine_type"}
+            self.engine = LMMEngineNvidiaNIM(**params)
         else:
-            self.add_system_prompt("You are a helpful assistant.")
+            raise ValueError("engine or engine_params must be provided")
 
-    def encode_image(self, image_content):
-        # if image_content is a path to an image file, check type of the image_content to verify
+        self.messages: list = []
+        self.system_prompt: str = system_prompt or "You are a helpful assistant."
+        self.add_system_prompt(self.system_prompt)
+
+    # ── Image encoding ─────────────────────────────────────────────────────
+
+    def encode_image(self, image_content) -> str:
         if isinstance(image_content, str):
-            with open(image_content, "rb") as image_file:
-                return base64.b64encode(image_file.read()).decode("utf-8")
-        else:
-            return base64.b64encode(image_content).decode("utf-8")
+            with open(image_content, "rb") as f:
+                return base64.b64encode(f.read()).decode("utf-8")
+        return base64.b64encode(image_content).decode("utf-8")
 
-    def reset(
-        self,
-    ):
+    # ── Message management ─────────────────────────────────────────────────
 
+    def reset(self):
         self.messages = [
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": self.system_prompt}],
-            }
+            {"role": "system", "content": [{"type": "text", "text": self.system_prompt}]}
         ]
 
-    def add_system_prompt(self, system_prompt):
+    def add_system_prompt(self, system_prompt: str):
         self.system_prompt = system_prompt
-        if len(self.messages) > 0:
+        if self.messages:
             self.messages[0] = {
                 "role": "system",
-                "content": [{"type": "text", "text": self.system_prompt}],
+                "content": [{"type": "text", "text": system_prompt}],
             }
         else:
             self.messages.append(
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": self.system_prompt}],
-                }
+                {"role": "system", "content": [{"type": "text", "text": system_prompt}]}
             )
 
-    def remove_message_at(self, index):
-        """Remove a message at a given index"""
+    def remove_message_at(self, index: int):
         if index < len(self.messages):
             self.messages.pop(index)
 
-    def replace_message_at(
-        self, index, text_content, image_content=None, image_detail="high"
-    ):
-        """Replace a message at a given index"""
-        if index < len(self.messages):
-            self.messages[index] = {
-                "role": self.messages[index]["role"],
-                "content": [{"type": "text", "text": text_content}],
-            }
-            if image_content:
-                base64_image = self.encode_image(image_content)
-                self.messages[index]["content"].append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{base64_image}",
-                            "detail": image_detail,
-                        },
-                    }
-                )
+    def replace_message_at(self, index: int, text_content: str, image_content=None, image_detail: str = "high"):
+        if index >= len(self.messages):
+            return
+        self.messages[index] = {
+            "role": self.messages[index]["role"],
+            "content": [{"type": "text", "text": text_content}],
+        }
+        if image_content is not None:
+            b64 = self.encode_image(image_content)
+            self.messages[index]["content"].append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}", "detail": image_detail},
+            })
 
     def add_message(
         self,
-        text_content,
+        text_content: str,
         image_content=None,
-        role=None,
-        image_detail="high",
-        put_text_last=False,
+        role: str = None,
+        image_detail: str = "high",
+        put_text_last: bool = False,
     ):
-        """Add a new message to the list of messages"""
+        # Infer role from conversation history (alternating user/assistant)
+        if role != "user":
+            last = self.messages[-1]["role"] if self.messages else "system"
+            role = "user" if last in ("system", "assistant") else "assistant"
 
-        # API-style inference from OpenAI and AzureOpenAI
-        if isinstance(
-            self.engine,
-            (
-                LMMEngineOpenAI,
-                LMMEngineAzureOpenAI,
-                LMMEngineHuggingFace,
-                LMMEngineGemini,
-                LMMEngineOpenRouter,
-                LMMEngineParasail,
-    LMMEngineNvidiaNIM,
-            ),
+        message = {
+            "role": role,
+            "content": [{"type": "text", "text": text_content}],
+        }
+
+        # Attach image(s) — NIM vision models use image_url format
+        if image_content is not None or (
+            isinstance(image_content, np.ndarray) and image_content.size > 0
         ):
-            # infer role from previous message
-            if role != "user":
-                if self.messages[-1]["role"] == "system":
-                    role = "user"
-                elif self.messages[-1]["role"] == "user":
-                    role = "assistant"
-                elif self.messages[-1]["role"] == "assistant":
-                    role = "user"
+            imgs = image_content if isinstance(image_content, list) else [image_content]
+            for img in imgs:
+                if img is None:
+                    continue
+                b64 = self.encode_image(img)
+                message["content"].append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{b64}",
+                        "detail": image_detail,
+                    },
+                })
 
-            message = {
-                "role": role,
-                "content": [{"type": "text", "text": text_content}],
-            }
+        if put_text_last:
+            text_part = message["content"].pop(0)
+            message["content"].append(text_part)
 
-            if isinstance(image_content, np.ndarray) or image_content:
-                # Check if image_content is a list or a single image
-                if isinstance(image_content, list):
-                    # If image_content is a list of images, loop through each image
-                    for image in image_content:
-                        base64_image = self.encode_image(image)
-                        message["content"].append(
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{base64_image}",
-                                    "detail": image_detail,
-                                },
-                            }
-                        )
-                else:
-                    # If image_content is a single image, handle it directly
-                    base64_image = self.encode_image(image_content)
-                    message["content"].append(
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_image}",
-                                "detail": image_detail,
-                            },
-                        }
-                    )
+        self.messages.append(message)
 
-            # Rotate text to be the last message if desired
-            if put_text_last:
-                text_content = message["content"].pop(0)
-                message["content"].append(text_content)
-
-            self.messages.append(message)
-
-        # For API-style inference from Anthropic
-        elif isinstance(self.engine, LMMEngineAnthropic):
-            # infer role from previous message
-            if role != "user":
-                if self.messages[-1]["role"] == "system":
-                    role = "user"
-                elif self.messages[-1]["role"] == "user":
-                    role = "assistant"
-                elif self.messages[-1]["role"] == "assistant":
-                    role = "user"
-
-            message = {
-                "role": role,
-                "content": [{"type": "text", "text": text_content}],
-            }
-
-            if image_content:
-                # Check if image_content is a list or a single image
-                if isinstance(image_content, list):
-                    # If image_content is a list of images, loop through each image
-                    for image in image_content:
-                        base64_image = self.encode_image(image)
-                        message["content"].append(
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": base64_image,
-                                },
-                            }
-                        )
-                else:
-                    # If image_content is a single image, handle it directly
-                    base64_image = self.encode_image(image_content)
-                    message["content"].append(
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": base64_image,
-                            },
-                        }
-                    )
-            self.messages.append(message)
-
-        # Locally hosted vLLM model inference
-        elif isinstance(self.engine, LMMEnginevLLM):
-            # infer role from previous message
-            if role != "user":
-                if self.messages[-1]["role"] == "system":
-                    role = "user"
-                elif self.messages[-1]["role"] == "user":
-                    role = "assistant"
-                elif self.messages[-1]["role"] == "assistant":
-                    role = "user"
-
-            message = {
-                "role": role,
-                "content": [{"type": "text", "text": text_content}],
-            }
-
-            if image_content:
-                # Check if image_content is a list or a single image
-                if isinstance(image_content, list):
-                    # If image_content is a list of images, loop through each image
-                    for image in image_content:
-                        base64_image = self.encode_image(image)
-                        message["content"].append(
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image;base64,{base64_image}"
-                                },
-                            }
-                        )
-                else:
-                    # If image_content is a single image, handle it directly
-                    base64_image = self.encode_image(image_content)
-                    message["content"].append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image;base64,{base64_image}"},
-                        }
-                    )
-
-            self.messages.append(message)
-        else:
-            raise ValueError("engine_type is not supported")
+    # ── Inference ──────────────────────────────────────────────────────────
 
     def get_response(
         self,
-        user_message=None,
-        messages=None,
-        temperature=0.0,
-        max_new_tokens=None,
-        use_thinking=False,
+        user_message: str = None,
+        messages: list = None,
+        temperature: float = 0.0,
+        max_new_tokens: int = None,
+        use_thinking: bool = False,
         **kwargs,
-    ):
-        """Generate the next response based on previous messages"""
-        if messages is None:
-            messages = self.messages
+    ) -> str:
+        msgs = messages if messages is not None else self.messages
         if user_message:
-            messages.append(
+            msgs = msgs + [
                 {"role": "user", "content": [{"type": "text", "text": user_message}]}
-            )
-
-        # Regular generation
+            ]
         if use_thinking:
             return self.engine.generate_with_thinking(
-                messages,
-                temperature=temperature,
-                max_new_tokens=max_new_tokens,
-                **kwargs,
+                msgs, temperature=temperature, max_new_tokens=max_new_tokens
             )
-
         return self.engine.generate(
-            messages,
-            temperature=temperature,
-            max_new_tokens=max_new_tokens,
-            **kwargs,
+            msgs, temperature=temperature, max_new_tokens=max_new_tokens
         )

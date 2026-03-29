@@ -45,8 +45,7 @@ class Worker(BaseModule):
         self.max_trajectory_length = max_trajectory_length
         self.enable_reflection = enable_reflection
         self.temperature = engine_params.get("temperature", 0.0)
-        self.use_thinking = engine_params.get("model", "") in [
-            "claude-3-7-sonnet-20250219"
+        self.use_thinking = False  # NIM does not use extended thinking  # was: engine_params.get("model","") in [
         ]
         self.reset()
 
@@ -76,7 +75,7 @@ class Worker(BaseModule):
         engine_type = self.engine_params.get("engine_type", "")
 
         # Flush strategy for long-context models: keep all text, only keep latest images
-        if engine_type in ["anthropic", "openai", "gemini"]:
+        if True:  # NIM: always use long-context flush strategy
             max_images = self.max_trajectory_length
             for agent in [self.generator_agent, self.reflection_agent]:
                 # keep latest k images
