@@ -1,0 +1,26 @@
+{
+  "name": "klimagent",
+  "version": "1.0.0",
+  "description": "KlimAgent - Autonomous AI workspace powered by NVIDIA NIM",
+  "main": "main.js",
+  "bin": {
+    "klimagent": "./bin/klimagent.js"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron .",
+    "server": "cd server && npm start",
+    "test": "echo \"No tests configured\" && exit 0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "electron-reload": "^2.0.0-alpha.1",
+    "express": "^5.2.1",
+    "openai": "^4.95.1"
+  },
+  "devDependencies": {
+    "electron": "^39.2.7"
+  },
+  "license": "MIT"
+}
