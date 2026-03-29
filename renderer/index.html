@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:3001;" />
+  <title>KlimAgent</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="app-shell">
+
+  <!-- ── Sidebar ─────────────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo-row">
+        <div class="logo-icon">K</div>
+        <div>
+          <div class="logo-text">KlimAgent</div>
+          <div class="logo-subtitle">AI Workspace</div>
+        </div>
+      </div>
+      <button class="new-chat-btn" id="new-chat-btn">
+        <span>+</span> New Chat
+      </button>
+    </div>
+
+    <div class="sidebar-section-label">Chats</div>
+    <div class="chat-list" id="chat-list"></div>
+
+    <div class="sidebar-footer">
+      <div class="model-selector-wrap">
+        <div class="model-selector-label">NVIDIA NIM Model</div>
+        <select class="model-selector" id="model-selector">
+          <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B Instruct</option>
+          <option value="nvidia/llama-3.1-nemotron-70b-instruct">Nemotron 70B Instruct</option>
+          <option value="nvidia/llama-3.1-nemotron-ultra-253b-v1">Nemotron Ultra 253B</option>
+          <option value="meta/llama-3.1-405b-instruct">Llama 3.1 405B Instruct</option>
+          <option value="mistralai/mixtral-8x22b-instruct-v0.1">Mixtral 8x22B</option>
+          <option value="mistralai/mistral-large">Mistral Large</option>
+          <option value="qwen/qwen2.5-72b-instruct">Qwen 2.5 72B</option>
+        </select>
+      </div>
+      <div class="status-pill" id="status-pill">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Connecting…</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main Area ───────────────────────────── -->
+  <main class="main-area" id="main-area">
+
+    <!-- Topbar -->
+    <div class="topbar">
+      <div class="topbar-title" id="topbar-title">KlimAgent</div>
+      <div class="topbar-actions">
+        <button class="icon-btn" id="clear-btn" title="Clear chat">
+          <span>⟳</span> Clear
+        </button>
+      </div>
+    </div>
+
+    <!-- Home Screen -->
+    <div id="home-screen">
+      <div class="home-hero">
+        <div class="hero-logo">K</div>
+        <h1 class="hero-title">KlimAgent</h1>
+        <p class="hero-sub">Autonomous AI workspace that turns natural language into real actions on your computer.</p>
+        <div class="nvidia-badge">
+          <span class="nvidia-badge-dot"></span>
+          Powered by NVIDIA NIM
+        </div>
+      </div>
+
+      <div class="home-input-wrap">
+        <textarea
+          class="home-input"
+          id="home-input"
+          placeholder="Describe a task — e.g. 'Read my package.json and add a lint script'"
+          rows="1"
+        ></textarea>
+        <button class="home-send-btn" id="home-send-btn" title="Send (Enter)">▶</button>
+      </div>
+
+      <div class="suggested-prompts">
+        <div class="prompt-card" data-prompt="List all JavaScript files in my project and summarize the folder structure">
+          <div class="prompt-card-icon">📁</div>
+          <div class="prompt-card-title">Explore codebase</div>
+          <div class="prompt-card-desc">List files and summarize project structure</div>
+        </div>
+        <div class="prompt-card" data-prompt="Create a Python script that monitors CPU and memory usage every 5 seconds">
+          <div class="prompt-card-icon">🐍</div>
+          <div class="prompt-card-title">Write a script</div>
+          <div class="prompt-card-desc">Generate and save executable code</div>
+        </div>
+        <div class="prompt-card" data-prompt="Run 'git status' and explain what changes are staged">
+          <div class="prompt-card-icon">🔧</div>
+          <div class="prompt-card-title">Run git commands</div>
+          <div class="prompt-card-desc">Execute shell commands and interpret output</div>
+        </div>
+        <div class="prompt-card" data-prompt="Read README.md and write an improved version with better formatting">
+          <div class="prompt-card-icon">📝</div>
+          <div class="prompt-card-title">Edit files</div>
+          <div class="prompt-card-desc">Read, modify, and write files on disk</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat Screen -->
+    <div id="chat-screen" class="hidden">
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-messages-inner" id="chat-messages-inner"></div>
+      </div>
+
+      <div class="chat-input-area">
+        <div class="chat-input-inner">
+          <textarea
+            class="chat-input"
+            id="chat-input"
+            placeholder="Message KlimAgent…"
+            rows="1"
+          ></textarea>
+          <button class="chat-send-btn" id="chat-send-btn" title="Send (Enter)">▶</button>
+        </div>
+        <div class="chat-hints">
+          <span><kbd>Enter</kbd> to send</span>
+          <span><kbd>Shift+Enter</kbd> for new line</span>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Toast notification -->
+<div class="toast" id="toast"></div>
+
+<script src="renderer.js"></script>
+</body>
+</html>
