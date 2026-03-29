@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:3001;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src http://localhost:3001 http://localhost:3002;" />
   <title>KlimAgent</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -18,19 +18,88 @@
         <div class="logo-icon">K</div>
         <div>
           <div class="logo-text">KlimAgent</div>
-          <div class="logo-subtitle">AI Workspace</div>
+          <div class="logo-subtitle">AI Workspace · NVIDIA NIM</div>
         </div>
       </div>
-      <button class="new-chat-btn" id="new-chat-btn">
-        <span>+</span> New Chat
-      </button>
+
+      <!-- Mode switcher -->
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="chat" title="Text Chat">💬 Chat</button>
+        <button class="mode-tab" data-mode="gui" title="GUI Agent">🖥 GUI</button>
+        <button class="mode-tab" data-mode="bench" title="OSWorld Benchmark">📊 Bench</button>
+      </div>
     </div>
 
-    <div class="sidebar-section-label">Chats</div>
-    <div class="chat-list" id="chat-list"></div>
+    <!-- Chat list (chat mode) -->
+    <div id="sidebar-chat-section">
+      <button class="new-chat-btn" id="new-chat-btn">+ New Chat</button>
+      <div class="sidebar-section-label">Chats</div>
+      <div class="chat-list" id="chat-list"></div>
+    </div>
+
+    <!-- GUI Agent sidebar (gui mode) -->
+    <div id="sidebar-gui-section" class="hidden">
+      <div class="sidebar-section-label">GUI Agent Config</div>
+      <div class="config-group">
+        <label class="config-label">Generation Model</label>
+        <select class="model-selector" id="gui-gen-model">
+          <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+          <option value="nvidia/llama-3.1-nemotron-70b-instruct">Nemotron 70B</option>
+          <option value="mistralai/mistral-large">Mistral Large</option>
+        </select>
+      </div>
+      <div class="config-group">
+        <label class="config-label">Vision/Grounding Model</label>
+        <select class="model-selector" id="gui-vis-model">
+          <option value="nvidia/llama-3.2-90b-vision-instruct">Llama 3.2 90B Vision</option>
+          <option value="nvidia/llama-3.2-11b-vision-instruct">Llama 3.2 11B Vision</option>
+          <option value="microsoft/phi-3.5-vision-instruct">Phi 3.5 Vision</option>
+        </select>
+      </div>
+      <div class="config-group">
+        <label class="config-label">Max Steps</label>
+        <input class="config-input" type="number" id="gui-max-steps" value="15" min="1" max="50" />
+      </div>
+      <div class="config-group config-check">
+        <input type="checkbox" id="gui-reflection" checked />
+        <label for="gui-reflection">Enable reflection</label>
+      </div>
+    </div>
+
+    <!-- Benchmark sidebar (bench mode) -->
+    <div id="sidebar-bench-section" class="hidden">
+      <div class="sidebar-section-label">Benchmark Config</div>
+      <div class="config-group">
+        <label class="config-label">Model</label>
+        <select class="model-selector" id="bench-model">
+          <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+          <option value="nvidia/llama-3.1-nemotron-70b-instruct">Nemotron 70B</option>
+          <option value="nvidia/llama-3.1-nemotron-ultra-253b-v1">Nemotron Ultra 253B</option>
+          <option value="mistralai/mistral-large">Mistral Large</option>
+        </select>
+      </div>
+      <div class="config-group">
+        <label class="config-label">Domain</label>
+        <select class="model-selector" id="bench-domain">
+          <option value="all">All</option>
+          <option value="os">OS</option>
+          <option value="web">Web</option>
+          <option value="office">Office</option>
+          <option value="workflow">Workflow</option>
+        </select>
+      </div>
+      <div class="config-group">
+        <label class="config-label">Max Tasks</label>
+        <input class="config-input" type="number" id="bench-tasks" value="5" min="1" max="100" />
+      </div>
+      <div class="config-group">
+        <label class="config-label">Steps/Task</label>
+        <input class="config-input" type="number" id="bench-steps" value="15" min="1" max="50" />
+      </div>
+    </div>
 
     <div class="sidebar-footer">
-      <div class="model-selector-wrap">
+      <div class="model-selector-wrap" id="chat-model-wrap">
         <div class="model-selector-label">NVIDIA NIM Model</div>
         <select class="model-selector" id="model-selector">
           <option value="meta/llama-3.3-70b-instruct">Llama 3.3 70B Instruct</option>
@@ -46,6 +115,10 @@
         <span class="status-dot" id="status-dot"></span>
         <span id="status-text">Connecting…</span>
       </div>
+      <div class="status-pill" id="bridge-pill" style="margin-top:4px">
+        <span class="status-dot" id="bridge-dot"></span>
+        <span id="bridge-text">Bridge: checking…</span>
+      </div>
     </div>
   </aside>
 
@@ -56,77 +129,149 @@
     <div class="topbar">
       <div class="topbar-title" id="topbar-title">KlimAgent</div>
       <div class="topbar-actions">
-        <button class="icon-btn" id="clear-btn" title="Clear chat">
-          <span>⟳</span> Clear
-        </button>
+        <button class="icon-btn" id="clear-btn" title="Clear">⟳ Clear</button>
       </div>
     </div>
 
-    <!-- Home Screen -->
-    <div id="home-screen">
-      <div class="home-hero">
-        <div class="hero-logo">K</div>
-        <h1 class="hero-title">KlimAgent</h1>
-        <p class="hero-sub">Autonomous AI workspace that turns natural language into real actions on your computer.</p>
-        <div class="nvidia-badge">
-          <span class="nvidia-badge-dot"></span>
-          Powered by NVIDIA NIM
+    <!-- ══ CHAT PANEL ══ -->
+    <div id="panel-chat" class="panel">
+      <!-- Home -->
+      <div id="home-screen">
+        <div class="home-hero">
+          <div class="hero-logo">K</div>
+          <h1 class="hero-title">KlimAgent</h1>
+          <p class="hero-sub">Autonomous AI workspace · text chat, GUI automation, and OSWorld benchmarking — all powered by NVIDIA NIM.</p>
+          <div class="nvidia-badge"><span class="nvidia-badge-dot"></span> NVIDIA NIM</div>
+        </div>
+        <div class="home-input-wrap">
+          <textarea class="home-input" id="home-input" placeholder="Describe a task…" rows="1"></textarea>
+          <button class="home-send-btn" id="home-send-btn">▶</button>
+        </div>
+        <div class="suggested-prompts">
+          <div class="prompt-card" data-prompt="List all files in my home directory and explain the structure">
+            <div class="prompt-card-icon">📁</div>
+            <div class="prompt-card-title">Explore files</div>
+            <div class="prompt-card-desc">List and explain directory structure</div>
+          </div>
+          <div class="prompt-card" data-prompt="Write a Python script to monitor CPU and memory usage every second">
+            <div class="prompt-card-icon">🐍</div>
+            <div class="prompt-card-title">Write a script</div>
+            <div class="prompt-card-desc">Generate and save executable code</div>
+          </div>
+          <div class="prompt-card" data-prompt="Run git status and explain what needs to be committed">
+            <div class="prompt-card-icon">🔧</div>
+            <div class="prompt-card-title">Git operations</div>
+            <div class="prompt-card-desc">Run and interpret shell commands</div>
+          </div>
+          <div class="prompt-card" data-prompt="Search for all TODO comments in my codebase and list them">
+            <div class="prompt-card-icon">🔍</div>
+            <div class="prompt-card-title">Search codebase</div>
+            <div class="prompt-card-desc">Find patterns across all files</div>
+          </div>
         </div>
       </div>
-
-      <div class="home-input-wrap">
-        <textarea
-          class="home-input"
-          id="home-input"
-          placeholder="Describe a task — e.g. 'Read my package.json and add a lint script'"
-          rows="1"
-        ></textarea>
-        <button class="home-send-btn" id="home-send-btn" title="Send (Enter)">▶</button>
-      </div>
-
-      <div class="suggested-prompts">
-        <div class="prompt-card" data-prompt="List all JavaScript files in my project and summarize the folder structure">
-          <div class="prompt-card-icon">📁</div>
-          <div class="prompt-card-title">Explore codebase</div>
-          <div class="prompt-card-desc">List files and summarize project structure</div>
+      <!-- Chat -->
+      <div id="chat-screen" class="hidden">
+        <div class="chat-messages" id="chat-messages">
+          <div class="chat-messages-inner" id="chat-messages-inner"></div>
         </div>
-        <div class="prompt-card" data-prompt="Create a Python script that monitors CPU and memory usage every 5 seconds">
-          <div class="prompt-card-icon">🐍</div>
-          <div class="prompt-card-title">Write a script</div>
-          <div class="prompt-card-desc">Generate and save executable code</div>
-        </div>
-        <div class="prompt-card" data-prompt="Run 'git status' and explain what changes are staged">
-          <div class="prompt-card-icon">🔧</div>
-          <div class="prompt-card-title">Run git commands</div>
-          <div class="prompt-card-desc">Execute shell commands and interpret output</div>
-        </div>
-        <div class="prompt-card" data-prompt="Read README.md and write an improved version with better formatting">
-          <div class="prompt-card-icon">📝</div>
-          <div class="prompt-card-title">Edit files</div>
-          <div class="prompt-card-desc">Read, modify, and write files on disk</div>
+        <div class="chat-input-area">
+          <div class="chat-input-inner">
+            <textarea class="chat-input" id="chat-input" placeholder="Message KlimAgent…" rows="1"></textarea>
+            <button class="chat-send-btn" id="chat-send-btn">▶</button>
+          </div>
+          <div class="chat-hints"><span><kbd>Enter</kbd> send</span><span><kbd>Shift+Enter</kbd> newline</span></div>
         </div>
       </div>
     </div>
 
-    <!-- Chat Screen -->
-    <div id="chat-screen" class="hidden">
-      <div class="chat-messages" id="chat-messages">
-        <div class="chat-messages-inner" id="chat-messages-inner"></div>
-      </div>
+    <!-- ══ GUI AGENT PANEL ══ -->
+    <div id="panel-gui" class="panel hidden">
+      <div class="gui-layout">
+        <!-- Left: task input + log -->
+        <div class="gui-left">
+          <div class="gui-task-area">
+            <div class="section-label">Task</div>
+            <textarea class="gui-task-input" id="gui-task-input" placeholder="Describe what to do on screen…&#10;e.g. Open Firefox and search for NVIDIA NIM documentation" rows="4"></textarea>
+            <div class="gui-btn-row">
+              <button class="action-btn primary" id="gui-run-btn">▶ Run Agent</button>
+              <button class="action-btn danger hidden" id="gui-stop-btn">■ Stop</button>
+            </div>
+          </div>
 
-      <div class="chat-input-area">
-        <div class="chat-input-inner">
-          <textarea
-            class="chat-input"
-            id="chat-input"
-            placeholder="Message KlimAgent…"
-            rows="1"
-          ></textarea>
-          <button class="chat-send-btn" id="chat-send-btn" title="Send (Enter)">▶</button>
+          <div class="section-label" style="margin-top:16px">Execution Log</div>
+          <div class="gui-log" id="gui-log">
+            <div class="log-placeholder">Agent log will appear here…</div>
+          </div>
         </div>
-        <div class="chat-hints">
-          <span><kbd>Enter</kbd> to send</span>
-          <span><kbd>Shift+Enter</kbd> for new line</span>
+
+        <!-- Right: live screenshot -->
+        <div class="gui-right">
+          <div class="section-label">Live Screen</div>
+          <div class="screenshot-container" id="screenshot-container">
+            <div class="screenshot-placeholder">
+              <div style="font-size:32px">🖥</div>
+              <div>Screenshot appears during execution</div>
+            </div>
+            <img class="screenshot-img hidden" id="screenshot-img" alt="Screen" />
+          </div>
+          <div class="step-counter" id="step-counter"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ BENCHMARK PANEL ══ -->
+    <div id="panel-bench" class="panel hidden">
+      <div class="bench-layout">
+        <div class="bench-header">
+          <div>
+            <h2 class="bench-title">OSWorld Benchmark</h2>
+            <p class="bench-sub">Evaluate KlimAgent on real desktop tasks using NVIDIA NIM inference. Results are compared against published Agent-S scores.</p>
+          </div>
+          <div class="bench-actions">
+            <button class="action-btn primary" id="bench-run-btn">▶ Run Benchmark</button>
+            <button class="action-btn danger hidden" id="bench-stop-btn">■ Stop</button>
+          </div>
+        </div>
+
+        <!-- Score cards -->
+        <div class="score-cards" id="score-cards">
+          <div class="score-card">
+            <div class="score-value" id="score-avg">—</div>
+            <div class="score-label">Avg Score</div>
+          </div>
+          <div class="score-card">
+            <div class="score-value" id="score-pct">—</div>
+            <div class="score-label">Success Rate</div>
+          </div>
+          <div class="score-card">
+            <div class="score-value" id="score-tasks">0</div>
+            <div class="score-label">Tasks Run</div>
+          </div>
+          <div class="score-card">
+            <div class="score-value" id="score-model">—</div>
+            <div class="score-label">Model</div>
+          </div>
+        </div>
+
+        <!-- Reference table -->
+        <div class="bench-ref">
+          <div class="section-label">Published Agent-S2.5 Scores (OSWorld)</div>
+          <table class="ref-table">
+            <thead><tr><th>Model</th><th>Provider</th><th>OSWorld Score</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td>GPT-4o</td><td>OpenAI</td><td>27.0%</td><td>Agent-S2.5 paper baseline</td></tr>
+              <tr><td>Claude Sonnet 3.7</td><td>Anthropic</td><td>38.8%</td><td>Best published</td></tr>
+              <tr><td>Llama 3.3 70B</td><td>NVIDIA NIM</td><td class="highlight">TBD (your run)</td><td>KlimAgent</td></tr>
+              <tr><td>Nemotron 70B</td><td>NVIDIA NIM</td><td class="highlight">TBD (your run)</td><td>KlimAgent</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Task results log -->
+        <div class="section-label" style="margin-top:16px">Task Results</div>
+        <div class="bench-log" id="bench-log">
+          <div class="log-placeholder">Run a benchmark to see per-task results…</div>
         </div>
       </div>
     </div>
@@ -134,9 +279,7 @@
   </main>
 </div>
 
-<!-- Toast notification -->
 <div class="toast" id="toast"></div>
-
 <script src="renderer.js"></script>
 </body>
 </html>
